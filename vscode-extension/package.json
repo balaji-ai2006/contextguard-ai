@@ -1,0 +1,146 @@
+{
+  "name": "contextguard-ai",
+  "displayName": "ContextGuard AI — Autonomous Bug Detection, Fix & Verification",
+  "description": "Privacy-first autonomous AI bug detection, minimal reproduction, sandbox verification, and safe patch application engine.",
+  "version": "0.1.0",
+  "publisher": "contextguard-ai",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Testing",
+    "Linters",
+    "Machine Learning"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "contextguard-sidebar",
+          "title": "ContextGuard AI",
+          "icon": "media/shield.svg"
+        }
+      ]
+    },
+    "views": {
+      "contextguard-sidebar": [
+        {
+          "type": "webview",
+          "id": "contextguard.sidebarView",
+          "name": "ContextGuard Engine",
+          "visibility": "visible"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "contextguard.scanWorkspace",
+        "title": "ContextGuard: Scan Workspace for Bugs",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.analyzeBug",
+        "title": "ContextGuard: Analyze Bug",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.generateFixes",
+        "title": "ContextGuard: Generate Candidate Fixes",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.simulateFixes",
+        "title": "ContextGuard: What-If Fix Simulation",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.verifyFix",
+        "title": "ContextGuard: Verify Fix in Sandbox",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.previewDiff",
+        "title": "ContextGuard: Preview Diff",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.applyFix",
+        "title": "ContextGuard: Apply Fix Safely",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.rollback",
+        "title": "ContextGuard: Rollback to Safe Checkpoint",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.analyzeCurrentFile",
+        "title": "ContextGuard: Analyze Current File for Bugs",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.reproduceAndFix",
+        "title": "ContextGuard: Autonomous Reproduce, Fix & Verify",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.startBackend",
+        "title": "ContextGuard: Start Local Backend Engine",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.checkBackendStatus",
+        "title": "ContextGuard: Check Backend Status",
+        "category": "ContextGuard AI"
+      }
+    ],
+    "configuration": {
+      "title": "ContextGuard AI",
+      "properties": {
+        "contextguard.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8765",
+          "description": "URL of the local ContextGuard Python backend engine."
+        },
+        "contextguard.privacyMode": {
+          "type": "string",
+          "enum": ["local", "hybrid", "cloud"],
+          "default": "local",
+          "description": "Privacy level. 'local' runs 100% locally with Ollama and zero telemetry."
+        },
+        "contextguard.ollamaModel": {
+          "type": "string",
+          "default": "deepseek-coder:latest",
+          "description": "Local Ollama model identifier for code debugging agents."
+        },
+        "contextguard.autoScanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect errors when files are saved."
+        },
+        "contextguard.sandboxEngine": {
+          "type": "string",
+          "enum": ["auto", "docker", "venv_process"],
+          "default": "auto",
+          "description": "Sandbox isolation engine to verify candidate patches."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node ./test-runner.js"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.3"
+  }
+}

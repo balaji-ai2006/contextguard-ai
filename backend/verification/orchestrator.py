@@ -41,7 +41,13 @@ class InvestigationOrchestrator:
         git_state = git_engine.get_git_state()
 
         # 3. Diagnose root cause
-        diagnosis = self.diagnostician.diagnose(bug, snapshot, code_snippet)
+        diagnosis = self.diagnostician.diagnose(
+            bug_info=bug,
+            runtime_snapshot=snapshot,
+            code_snippet=code_snippet,
+            git_context=git_state,
+            workspace_root=repo_root
+        )
         root_cause_graph = {
             "rootCause": diagnosis.get("root_cause", "Unknown root cause"),
             "failurePoint": diagnosis.get("failure_point", f"Line {line_no}"),
@@ -53,7 +59,7 @@ class InvestigationOrchestrator:
         }
 
         # 4. Generate candidate patches
-        raw_candidates = self.fix_generator.generate_candidates(bug, diagnosis, code_snippet)
+        raw_candidates = self.fix_generator.generate_candidates(bug, diagnosis, code_snippet, workspace_root=repo_root)
         candidate_patches = []
 
         for idx, cand in enumerate(raw_candidates):
@@ -126,6 +132,7 @@ class InvestigationOrchestrator:
             "reproduction_confirmed": True,
             "reproduction_test_code": "def test_reproduce():\n    assert calculate_total(None) == 0",
             "root_cause_graph": root_cause_graph,
+            "diagnosis": diagnosis,
             "candidate_patches": candidate_patches,
             "similar_bugs": similar_bugs,
             "git_state": git_state

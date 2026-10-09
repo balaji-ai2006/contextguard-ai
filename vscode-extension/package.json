@@ -4,6 +4,28 @@
   "description": "Privacy-first autonomous AI bug detection, minimal reproduction, sandbox verification, and safe patch application engine.",
   "version": "0.1.0",
   "publisher": "contextguard-ai",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/balaji-ai2006/contextguard-ai.git"
+  },
+  "homepage": "https://github.com/balaji-ai2006/contextguard-ai#readme",
+  "bugs": {
+    "url": "https://github.com/balaji-ai2006/contextguard-ai/issues"
+  },
+  "keywords": [
+    "debugging",
+    "ai",
+    "bug-fix",
+    "verification",
+    "traceback",
+    "sandbox",
+    "python",
+    "javascript",
+    "security"
+  ],
+  "qna": "marketplace",
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -54,6 +76,11 @@
         "category": "ContextGuard AI"
       },
       {
+        "command": "contextguard.scanAST",
+        "title": "ContextGuard: Scan AST Deep Static Inspection",
+        "category": "ContextGuard AI"
+      },
+      {
         "command": "contextguard.simulateFixes",
         "title": "ContextGuard: What-If Fix Simulation",
         "category": "ContextGuard AI"
@@ -97,6 +124,31 @@
         "command": "contextguard.checkBackendStatus",
         "title": "ContextGuard: Check Backend Status",
         "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.enableRuntimeSnapshots",
+        "title": "ContextGuard AI: Enable Runtime Snapshots",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.disableRuntimeSnapshots",
+        "title": "ContextGuard AI: Disable Runtime Snapshots",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.showRecentSnapshots",
+        "title": "ContextGuard AI: Show Recent Snapshots",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.clearSnapshots",
+        "title": "ContextGuard AI: Clear Snapshots",
+        "category": "ContextGuard AI"
+      },
+      {
+        "command": "contextguard.runWithSnapshot",
+        "title": "ContextGuard AI: Run File with Runtime Snapshot Tracing",
+        "category": "ContextGuard AI"
       }
     ],
     "configuration": {
@@ -128,6 +180,21 @@
           "enum": ["auto", "docker", "venv_process"],
           "default": "auto",
           "description": "Sandbox isolation engine to verify candidate patches."
+        },
+        "contextguard.runtimeSnapshots.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable runtime memory snapshot capture at exception events (disabled by default)."
+        },
+        "contextguard.runtimeSnapshots.backendTransmission": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt-in to transmit sanitized snapshots to the local backend engine (disabled by default)."
+        },
+        "contextguard.runtimeSnapshots.maxHistorySize": {
+          "type": "number",
+          "default": 50,
+          "description": "Maximum number of in-memory runtime snapshots retained."
         }
       }
     }

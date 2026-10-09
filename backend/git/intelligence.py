@@ -59,6 +59,43 @@ class GitIntelligence:
             "uncommittedFiles": uncommitted_files
         }
 
+    def get_recent_commits(self, limit: int = 5) -> List[Dict[str, str]]:
+        """Safe read-only inspection of recent commits for team context."""
+        ok, out = self._run_git(["log", f"-n{limit}", "--pretty=format:%h|%an|%s|%cd", "--date=short"])
+        commits = []
+        if ok and out:
+            for line in out.splitlines():
+                parts = line.split("|", 3)
+                if len(parts) == 4:
+                    commits.append({
+                        "hash": parts[0],
+                        "author": parts[1],
+                        "summary": parts[2],
+                        "date": parts[3]
+                    })
+        return commits
+
+    def detect_team_conflicts(self, proposed_files: List[str]) -> Dict[str, Any]:
+        """
+        Detects whether proposed fix files overlap with uncommitted changes or branch conflicts.
+        Never modifies, stages, commits, or discards any file.
+        """
+        state = self.get_git_state()
+        uncommitted = set(os.path.normpath(f) for f in state.get("uncommittedFiles", []))
+        conflicts = []
+        for pf in proposed_files:
+            norm_pf = os.path.normpath(pf)
+            base_pf = os.path.basename(norm_pf)
+            for uf in uncommitted:
+                if base_pf == os.path.basename(uf) or norm_pf in uf:
+                    conflicts.append(pf)
+                    break
+        return {
+            "has_conflict": len(conflicts) > 0 or state.get("hasConflicts", False),
+            "conflicting_files": conflicts,
+            "is_clean": state.get("isClean", True)
+        }
+
     def get_file_hash(self, file_path: str) -> Optional[str]:
         """Computes SHA256 of file content to detect concurrent modification drift."""
         if not os.path.exists(file_path):

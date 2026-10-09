@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SidebarProvider = void 0;
 const vscode = __importStar(require("vscode"));
+const snapshotManager_1 = require("../runtime/snapshotManager");
 class SidebarProvider {
     _extensionUri;
     backendClient;
@@ -43,6 +44,7 @@ class SidebarProvider {
     currentBug;
     candidatePatches = [];
     rootCauseGraph;
+    diagnosis;
     similarBugs = [];
     gitState;
     bugDna;
@@ -95,7 +97,11 @@ class SidebarProvider {
                     break;
                 }
                 case 'onVerifyFix': {
-                    vscode.window.showInformationMessage('ContextGuard AI: Executing isolated verification sandbox...');
+                    await this.verifyPatch(data.patchId);
+                    break;
+                }
+                case 'onRejectPatch': {
+                    await this.rejectPatch(data.patchId);
                     break;
                 }
                 case 'onApplyPatch': {
@@ -121,6 +127,21 @@ class SidebarProvider {
                     }
                     break;
                 }
+                case 'onToggleCapture': {
+                    const newState = !snapshotManager_1.extensionSnapshotManager.isCaptureEnabled();
+                    snapshotManager_1.extensionSnapshotManager.setCaptureEnabled(newState);
+                    vscode.window.showInformationMessage(`ContextGuard AI: Runtime memory snapshot capture ${newState ? 'ENABLED (Local-only mode)' : 'DISABLED'}.`);
+                    this.updateWebview();
+                    break;
+                }
+                case 'onClearSnapshots': {
+                    vscode.commands.executeCommand('contextguard.clearSnapshots');
+                    break;
+                }
+                case 'onRunDiagnostic': {
+                    vscode.commands.executeCommand('contextguard.runWithSnapshot');
+                    break;
+                }
             }
         });
         this.refreshBackendStatus();
@@ -138,6 +159,7 @@ class SidebarProvider {
         this.currentBug = bug;
         this.candidatePatches = [];
         this.rootCauseGraph = undefined;
+        this.diagnosis = undefined;
         this.reproductionConfirmed = false;
         this.populateMockDnaAndTimeTravel(bug);
         this.updateWebview();
@@ -253,6 +275,7 @@ class SidebarProvider {
             this.candidatePatches = result.candidatePatches;
             this.similarBugs = result.similarBugs;
             this.gitState = result.gitState;
+            this.diagnosis = result.diagnosis;
             this.isInvestigating = false;
             this.updateWebview();
             vscode.window.showInformationMessage(`ContextGuard AI: Found ${result.candidatePatches.length} candidate fix(es). Reproduction: ${result.reproductionConfirmed ? 'CONFIRMED ✓' : 'NOT CONFIRMED'}`);
@@ -269,8 +292,13 @@ class SidebarProvider {
             vscode.window.showErrorMessage('Selected patch not found.');
             return;
         }
+        const choice = await vscode.window.showInformationMessage(`ContextGuard AI: Are you sure you want to apply "${patch.title}" to ${vscode.workspace.asRelativePath(this.currentBug.file)}?`, { modal: true }, 'Confirm & Apply', 'Cancel');
+        if (choice !== 'Confirm & Apply') {
+            vscode.window.showInformationMessage('Patch application cancelled by user.');
+            return;
+        }
         try {
-            const res = await this.backendClient.applyPatch(patch.id, this.currentBug.file, patch.diff);
+            const res = await this.backendClient.applyPatch(patch.id, this.currentBug.file, patch.diff, undefined, true);
             if (res.success) {
                 vscode.window.showInformationMessage(`Patch applied safely: ${res.message}`);
                 this.updateWebview();
@@ -281,6 +309,35 @@ class SidebarProvider {
         }
         catch (e) {
             vscode.window.showErrorMessage(`Apply Patch error: ${e.message}`);
+        }
+    }
+    async rejectPatch(patchId) {
+        try {
+            const res = await this.backendClient.rejectPatch(patchId);
+            if (res.success) {
+                this.candidatePatches = this.candidatePatches.filter((p) => p.id !== patchId);
+                vscode.window.showInformationMessage('Candidate patch rejected and removed from proposals.');
+                this.updateWebview();
+            }
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Reject Patch error: ${e.message}`);
+        }
+    }
+    async verifyPatch(patchId) {
+        const patch = this.candidatePatches.find((p) => p.id === patchId);
+        if (!patch || !this.currentBug)
+            return;
+        vscode.window.showInformationMessage(`ContextGuard AI: Running isolated verification for "${patch.title}"...`);
+        try {
+            const workspaceFolder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const res = await this.backendClient.verifyPatch(patch, this.currentBug, undefined, workspaceFolder);
+            patch.verificationStatus = res.verification_status;
+            vscode.window.showInformationMessage(`Verification: ${res.verification_status} (${res.summary})`);
+            this.updateWebview();
+        }
+        catch (e) {
+            vscode.window.showErrorMessage(`Verification error: ${e.message}`);
         }
     }
     async rollbackPatch() {
@@ -308,10 +365,15 @@ class SidebarProvider {
     updateWebview() {
         if (!this._view)
             return;
+        const activeSnapshot = this.currentBug?.runtimeSnapshot || snapshotManager_1.extensionSnapshotManager.listSnapshots(1)[0];
         this._view.webview.postMessage({
             type: 'updateState',
             state: {
                 currentBug: this.currentBug,
+                runtimeSnapshot: activeSnapshot,
+                captureEnabled: snapshotManager_1.extensionSnapshotManager.isCaptureEnabled(),
+                backendTransmissionEnabled: snapshotManager_1.extensionSnapshotManager.isBackendTransmissionEnabled(),
+                snapshotCount: snapshotManager_1.extensionSnapshotManager.count(),
                 candidatePatches: this.candidatePatches,
                 rootCauseGraph: this.rootCauseGraph,
                 similarBugs: this.similarBugs,
@@ -323,7 +385,8 @@ class SidebarProvider {
                 preventionRules: this.preventionRules,
                 codeHealth: this.codeHealth,
                 isInvestigating: this.isInvestigating,
-                reproductionConfirmed: this.reproductionConfirmed
+                reproductionConfirmed: this.reproductionConfirmed,
+                diagnosis: this.diagnosis
             }
         });
     }
@@ -477,6 +540,39 @@ class SidebarProvider {
     .status-PARTIALLY_VERIFIED { background: #78350f; color: #fbbf24; }
     .status-UNVERIFIED { background: #374151; color: #9ca3af; }
     .status-FAILED { background: #7f1d1d; color: #f87171; }
+
+    .var-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(0, 0, 0, 0.25);
+      padding: 4px 6px;
+      border-radius: 4px;
+      margin-bottom: 4px;
+      font-size: 11px;
+      border-left: 2px solid #38bdf8;
+    }
+    .var-name { font-weight: 700; color: #7dd3fc; }
+    .var-type { font-size: 9px; color: #94a3b8; margin-left: 4px; }
+    .var-val { font-family: monospace; color: #f1f5f9; word-break: break-all; }
+    .badge-redacted {
+      background: #7f1d1d;
+      color: #fca5a5;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 9px;
+      font-weight: 700;
+      margin-left: 4px;
+    }
+    .badge-truncated {
+      background: #713f12;
+      color: #fde047;
+      padding: 1px 4px;
+      border-radius: 3px;
+      font-size: 9px;
+      font-weight: 700;
+      margin-left: 4px;
+    }
   </style>
 </head>
 <body>
@@ -532,25 +628,138 @@ class SidebarProvider {
     function analyzeBug() { vscode.postMessage({ type: 'onAnalyzeBug' }); }
     function generateFixes() { vscode.postMessage({ type: 'onGenerateFixes' }); }
     function simulateFixes() { vscode.postMessage({ type: 'onSimulateFixes' }); }
-    function verifyFix() { vscode.postMessage({ type: 'onVerifyFix' }); }
+    function verifyFix(patchId) { vscode.postMessage({ type: 'onVerifyFix', patchId }); }
+    function rejectPatch(patchId) { vscode.postMessage({ type: 'onRejectPatch', patchId }); }
     function applyPatch(patchId) { vscode.postMessage({ type: 'onApplyPatch', patchId }); }
     function rollback() { vscode.postMessage({ type: 'onRollback' }); }
     function previewDiff(patchId) { vscode.postMessage({ type: 'onPreviewDiff', patchId }); }
     function openBugFile() { vscode.postMessage({ type: 'onOpenBugFile' }); }
+    function toggleCapture() { vscode.postMessage({ type: 'onToggleCapture' }); }
+    function clearSnapshots() { vscode.postMessage({ type: 'onClearSnapshots' }); }
+    function runDiagnostic() { vscode.postMessage({ type: 'onRunDiagnostic' }); }
 
     function render() {
       const container = document.getElementById('content');
-      if (!currentState.currentBug) {
-        container.innerHTML = \`
+      const snap = currentState.runtimeSnapshot;
+      const isEnabled = currentState.captureEnabled;
+
+      let controlsHtml = \`
+        <div class="card" style="padding: 6px 10px; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between; border-left: 2px solid \${isEnabled ? '#4ade80' : '#64748b'};">
+          <div>
+            <span style="font-weight: 700; font-size: 11px;">Snapshot Engine:</span>
+            <span style="font-size: 10px; color: \${isEnabled ? '#4ade80' : '#94a3b8'};">
+              \${isEnabled ? 'RECORDING 🟢' : 'DISABLED ⚪'}
+            </span>
+          </div>
+          <div style="display: flex; gap: 4px;">
+            <button class="btn btn-secondary" style="width: auto; padding: 2px 7px; font-size: 10px; margin: 0;" onclick="toggleCapture()">
+              \${isEnabled ? 'Disable' : 'Enable'}
+            </button>
+            <button class="btn btn-secondary" style="width: auto; padding: 2px 7px; font-size: 10px; margin: 0;" onclick="runDiagnostic()">
+              ⚡ Trace File
+            </button>
+          </div>
+        </div>
+      \`;
+
+      let snapHtml = '';
+      if (snap) {
+        const vars = snap.variableSnapshots || {};
+        const varKeys = Object.keys(vars);
+        const hasVars = varKeys.length > 0;
+        const statusColor = snap.captureStatus === 'success' ? '#4ade80' : snap.captureStatus === 'partial' ? '#fbbf24' : '#94a3b8';
+
+        snapHtml = \`
+          <!-- RUNTIME MEMORY SNAPSHOT -->
+          <div class="card" style="border-left: 3px solid #38bdf8;">
+            <div class="card-title">
+              <span>Runtime Memory Snapshot</span>
+              <span style="font-size: 9px; font-weight: 700; color: \${statusColor}; border: 1px solid \${statusColor}; border-radius: 8px; padding: 1px 6px;">
+                \${escapeHtml((snap.captureStatus || 'SUCCESS').toUpperCase())}
+              </span>
+            </div>
+
+            <div style="font-size: 10px; color: #94a3b8; margin-bottom: 6px; display: flex; justify-content: space-between;">
+              <span>Method: <strong style="color: #cbd5e1;">\${escapeHtml(snap.captureMethod || 'sys_settrace')}</strong></span>
+              <span>\${escapeHtml(snap.timestamp ? new Date(snap.timestamp).toLocaleTimeString() : '')}</span>
+            </div>
+
+            <div style="font-size: 11px; margin-bottom: 4px;">
+              <span style="color: #f87171; font-weight: 700;">\${escapeHtml(snap.errorType || 'RuntimeError')}:</span>
+              <span style="color: #cbd5e1;">\${escapeHtml(snap.errorMessage || 'Exception occurred')}</span>
+            </div>
+
+            <div style="font-size: 10px; color: #94a3b8; margin-bottom: 6px;">
+              Location: <strong style="color: #cbd5e1;">\${escapeHtml(snap.filePath || 'unknown')}:\${snap.lineNumber || '?'}</strong> in <code style="color: #38bdf8;">\${escapeHtml(snap.functionName || 'module')}</code>
+            </div>
+
+            \${snap.failedExpression ? \`
+              <div style="background: rgba(0,0,0,0.3); border-radius: 4px; padding: 4px 6px; margin-bottom: 6px; border: 1px solid rgba(255,255,255,0.05);">
+                <div style="font-size: 9px; text-transform: uppercase; color: #94a3b8; font-weight: 700;">Failed Expression:</div>
+                <code style="color: #fca5a5; font-size: 11px;">\${escapeHtml(snap.failedExpression)}</code>
+              </div>
+            \` : ''}
+
+            \${snap.heuristicExplanation ? \`
+              <div style="background: rgba(56, 189, 248, 0.08); border-left: 2px solid #38bdf8; border-radius: 3px; padding: 5px 7px; margin-bottom: 6px;">
+                <div style="font-size: 9px; text-transform: uppercase; color: #38bdf8; font-weight: 700;">Likely Explanation (Heuristic Inference):</div>
+                <div style="font-size: 10px; color: #e2e8f0; margin-top: 2px;">\${escapeHtml(snap.heuristicExplanation)}</div>
+              </div>
+            \` : ''}
+
+            <div style="font-size: 10px; font-weight: 700; text-transform: uppercase; color: #94a3b8; margin-bottom: 4px; display: flex; justify-content: space-between;">
+              <span>Captured Local Variables:</span>
+              <span style="font-weight: 400; color: #64748b;">(Pre-redaction verified)</span>
+            </div>
+
+            \${hasVars ? \`
+              <div style="display: flex; flex-direction: column; gap: 4px;">
+                \${varKeys.map(k => {
+                  const v = vars[k];
+                  return \`
+                    <div class="var-row">
+                      <div>
+                        <span class="var-name">\${escapeHtml(v.name)}</span>
+                        <span class="var-type">(\${escapeHtml(v.type)})</span>
+                        \${v.redacted ? '<span class="badge-redacted">REDACTED 🔒</span>' : ''}
+                        \${v.truncated ? '<span class="badge-truncated">TRUNCATED ✂️</span>' : ''}
+                      </div>
+                      <div class="var-val">\${escapeHtml(v.preview)}</div>
+                    </div>
+                  \`;
+                }).join('')}
+              </div>
+            \` : \`
+              <div style="font-size: 10px; color: #94a3b8; font-style: italic; background: rgba(0,0,0,0.2); padding: 5px; border-radius: 4px;">
+                \${snap.captureStatus === 'unavailable' ? 'Variable state unavailable for this frame.' : 'No local variables in current exception scope.'}
+              </div>
+            \`}
+
+            <div style="font-size: 9px; color: #64748b; margin-top: 6px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 4px; display: flex; justify-content: space-between;">
+              <span>Capture Mode: Local In-Memory Only 🛡️</span>
+              <span style="cursor: pointer; color: #f87171;" onclick="clearSnapshots()">Clear Snapshots</span>
+            </div>
+          </div>
+        \`;
+      }
+
+      if (!currentState.currentBug && !snap) {
+        container.innerHTML = controlsHtml + \`
           <div class="card" style="text-align: center; color: #94a3b8; padding: 20px 10px;">
             <p style="font-weight: 600;">No active bug selected</p>
-            <p style="font-size: 11px;">Save a file with an error, trigger terminal execution, or click Analyze Bug above.</p>
+            <p style="font-size: 11px;">Save a file with an error, trigger terminal execution, or run diagnostic snapshot tracing above.</p>
           </div>
         \`;
         return;
       }
 
-      const bug = currentState.currentBug;
+      const bug = currentState.currentBug || {
+        severity: 'HIGH',
+        errorType: snap.errorType || 'RuntimeError',
+        message: snap.errorMessage || 'Runtime error captured',
+        file: snap.filePath || 'unknown',
+        line: snap.lineNumber || 1
+      };
       const dna = currentState.bugDna;
       const tt = currentState.timeTravelFrames || [];
       const sims = currentState.simulations || [];
@@ -558,7 +767,7 @@ class SidebarProvider {
       const tq = currentState.testQuality;
       const ch = currentState.codeHealth;
 
-      let html = \`
+      let html = controlsHtml + snapHtml + \`
         <!-- 1. BUG OVERVIEW -->
         <div class="card">
           <div class="card-title">
@@ -592,6 +801,35 @@ class SidebarProvider {
               <ol style="margin: 2px 0 0 14px; padding: 0;">
                 \${rc.propagationPath.map(p => \`<li>\${escapeHtml(p)}</li>\`).join('')}
               </ol>
+            </div>
+            <div style="margin-top: 6px; display: flex; justify-content: flex-end;">
+              <button class="btn btn-secondary" style="width: auto; padding: 2px 8px; font-size: 10px; margin: 0;" onclick="analyzeBug()">🔄 Retry Diagnosis</button>
+            </div>
+          </div>
+
+          <!-- FACT VS HYPOTHESIS SECTION (Phase 5/7) -->
+          <div class="card" style="border-left: 3px solid #10b981;">
+            <div class="card-title">
+              <span>Observed Facts vs. AI Hypotheses</span>
+              <span style="font-size: 9px; color: #10b981; font-weight: 700; border: 1px solid #10b981; border-radius: 8px; padding: 1px 5px;">VERIFIED EVIDENCE 🛡️</span>
+            </div>
+            <div style="background: rgba(16, 185, 129, 0.08); border-radius: 4px; padding: 6px; margin-bottom: 6px;">
+              <div style="font-size: 9px; font-weight: 700; color: #34d399; text-transform: uppercase;">
+                Confirmed Runtime Facts (Ground Truth):
+              </div>
+              <ul style="margin: 3px 0 0 14px; padding: 0; font-size: 10px; color: #e2e8f0;">
+                <li><strong>Failure Location:</strong> \${escapeHtml(rc.failurePoint)}</li>
+                <li><strong>Observed Error:</strong> \${escapeHtml(bug.errorType)}: \${escapeHtml(bug.message)}</li>
+                \${snap && snap.failedExpression ? \`<li><strong>Failing Expression:</strong> <code>\${escapeHtml(snap.failedExpression)}</code></li>\` : ''}
+              </ul>
+            </div>
+            <div style="background: rgba(245, 158, 11, 0.08); border-radius: 4px; padding: 6px;">
+              <div style="font-size: 9px; font-weight: 700; color: #fbbf24; text-transform: uppercase;">
+                Diagnostic Hypotheses (AI Inference — Requires Verification):
+              </div>
+              <div style="font-size: 10px; color: #fef3c7; margin-top: 3px;">
+                \${escapeHtml(rc.rootCause)}
+              </div>
             </div>
           </div>
         \`;
@@ -664,25 +902,39 @@ class SidebarProvider {
         html += \`<div style="font-weight: 700; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase; color: #94a3b8;">Suggested Fixes (\${currentState.candidatePatches.length})</div>\`;
         currentState.candidatePatches.forEach((p, idx) => {
           html += \`
-            <div class="card">
+            <div class="card" style="border-left: 3px solid #38bdf8;">
               <div class="card-title">
                 <span>Fix #\${idx + 1}: \${escapeHtml(p.title)}</span>
                 <span class="status-pill status-\${p.verificationStatus}">\${p.verificationStatus}</span>
               </div>
-              <div style="font-size: 10px; color: #94a3b8; margin-bottom: 4px;">\${escapeHtml(p.description)}</div>
-              <div style="font-size: 11px; font-weight: 700; color: #38bdf8;">Evidence Confidence: \${p.confidence}/100</div>
+              <div style="font-size: 10px; color: #cbd5e1; margin-bottom: 4px;">\${escapeHtml(p.description)}</div>
+              \${p.whyItWorks ? \`<div style="font-size: 10px; color: #4ade80; margin-bottom: 3px;"><strong>Why It Works:</strong> \${escapeHtml(p.whyItWorks)}</div>\` : ''}
+              \${p.risks && p.risks.length > 0 ? \`<div style="font-size: 10px; color: #fbbf24; margin-bottom: 4px;"><strong>Side Effects / Risks:</strong> \${escapeHtml(p.risks.join('; '))}</div>\` : ''}
+              <div style="font-size: 11px; font-weight: 700; color: #38bdf8; margin-bottom: 6px;">Evidence Confidence: \${p.confidence}/100</div>
               
-              <!-- Buttons -->
+              <!-- Minimal Diff Preview Accordion -->
+              \${p.diff ? \`
+                <details style="margin-bottom: 6px; background: rgba(0,0,0,0.25); border-radius: 4px; padding: 4px 6px;">
+                  <summary style="cursor: pointer; font-size: 10px; font-weight: 600; color: #38bdf8;">View Minimal Unified Diff</summary>
+                  <pre style="margin-top: 4px; max-height: 120px;">\${escapeHtml(p.diff)}</pre>
+                </details>
+              \` : ''}
+
+              <!-- Functional Action Buttons (Phase 7) -->
               <div class="btn-group">
                 <button class="btn btn-secondary" onclick="previewDiff('\${p.id}')">Preview Diff</button>
+                <button class="btn btn-secondary" onclick="verifyFix('\${p.id}')">🛡️ Verify</button>
+              </div>
+              <div class="btn-group" style="margin-top: 4px;">
                 <button class="btn" onclick="applyPatch('\${p.id}')">Apply Fix</button>
+                <button class="btn btn-secondary" style="color: #f87171;" onclick="rejectPatch('\${p.id}')">❌ Reject</button>
               </div>
             </div>
           \`;
         });
 
         html += \`
-          <button class="btn btn-danger" onclick="rollback()">↩️ Rollback to Safe Checkpoint</button>
+          <button class="btn btn-danger" style="margin-top: 6px;" onclick="rollback()">↩️ Rollback to Safe Checkpoint</button>
         \`;
       }
 

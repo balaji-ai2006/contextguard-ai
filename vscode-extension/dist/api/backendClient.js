@@ -97,22 +97,74 @@ class BackendClient {
             rootCauseGraph: data.root_cause_graph,
             candidatePatches: data.candidate_patches || [],
             similarBugs: data.similar_bugs || [],
-            gitState: data.git_state
+            gitState: data.git_state,
+            diagnosis: data.diagnosis
         };
     }
-    async applyPatch(patchId, filePath, diff) {
+    async previewPatch(filePath, diff, originalHash) {
+        const resp = await fetch(`${this.baseUrl}/api/patch/preview`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                patch_id: 'preview',
+                file_path: filePath,
+                diff,
+                original_hash: originalHash
+            }),
+            signal: AbortSignal.timeout(10000)
+        });
+        if (!resp.ok) {
+            throw new Error(`Failed to preview patch: ${await resp.text()}`);
+        }
+        return (await resp.json());
+    }
+    async applyPatch(patchId, filePath, diff, originalFileHash, userApproved = true) {
         const resp = await fetch(`${this.baseUrl}/api/patch/apply`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 patch_id: patchId,
                 file_path: filePath,
-                diff
+                diff,
+                original_file_hash: originalFileHash,
+                user_approved: userApproved
             }),
             signal: AbortSignal.timeout(10000)
         });
         if (!resp.ok) {
             throw new Error(`Failed to apply patch: ${await resp.text()}`);
+        }
+        return (await resp.json());
+    }
+    async rejectPatch(patchId, reason = 'User rejected proposed patch') {
+        const resp = await fetch(`${this.baseUrl}/api/patch/reject`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                patch_id: patchId,
+                reason
+            }),
+            signal: AbortSignal.timeout(10000)
+        });
+        if (!resp.ok) {
+            throw new Error(`Failed to reject patch: ${await resp.text()}`);
+        }
+        return (await resp.json());
+    }
+    async verifyPatch(candidatePatch, bug, reproductionTestCode, workspaceRoot) {
+        const resp = await fetch(`${this.baseUrl}/api/verify`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                candidate_patch: candidatePatch,
+                bug,
+                reproduction_test_code: reproductionTestCode,
+                workspace_root: workspaceRoot
+            }),
+            signal: AbortSignal.timeout(20000)
+        });
+        if (!resp.ok) {
+            throw new Error(`Failed to verify patch: ${await resp.text()}`);
         }
         return (await resp.json());
     }
@@ -143,6 +195,103 @@ class BackendClient {
             throw new Error(`Failed to submit feedback: ${await resp.text()}`);
         }
         return (await resp.json());
+    }
+    async detectAst(sourceCode, filePath, language = 'python') {
+        try {
+            const resp = await fetch(`${this.baseUrl}/api/detect/ast`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    source_code: sourceCode,
+                    file_path: filePath,
+                    language
+                }),
+                signal: AbortSignal.timeout(8000)
+            });
+            if (resp.ok) {
+                const data = (await resp.json());
+                return data.bugs || [];
+            }
+        }
+        catch {
+            // Backend unreachable or timed out
+        }
+        return [];
+    }
+    async detectTraceback(text, language) {
+        try {
+            const resp = await fetch(`${this.baseUrl}/api/detect/traceback`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    text,
+                    language
+                }),
+                signal: AbortSignal.timeout(8000)
+            });
+            if (resp.ok) {
+                const data = (await resp.json());
+                if (data.bugs && data.bugs.length > 0) {
+                    return data.bugs[0];
+                }
+            }
+        }
+        catch {
+            // Backend unreachable or timed out
+        }
+        return null;
+    }
+    async sendSnapshot(snapshot, optIn = false) {
+        try {
+            const resp = await fetch(`${this.baseUrl}/snapshots`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-ContextGuard-OptIn': optIn ? 'true' : 'false'
+                },
+                body: JSON.stringify(snapshot),
+                signal: AbortSignal.timeout(8000)
+            });
+            if (resp.ok) {
+                return (await resp.json());
+            }
+        }
+        catch {
+            // Backend not running or rejected
+        }
+        return null;
+    }
+    async getSnapshots(limit = 50) {
+        try {
+            const resp = await fetch(`${this.baseUrl}/snapshots?limit=${limit}`, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(5000)
+            });
+            if (resp.ok) {
+                return (await resp.json());
+            }
+        }
+        catch {
+            // Backend offline
+        }
+        return [];
+    }
+    async clearBackendSnapshots() {
+        try {
+            const resp = await fetch(`${this.baseUrl}/snapshots`, {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                signal: AbortSignal.timeout(5000)
+            });
+            if (resp.ok) {
+                return (await resp.json());
+            }
+        }
+        catch {
+            // Backend offline
+        }
+        return { cleared: 0, message: 'Backend unavailable' };
     }
 }
 exports.BackendClient = BackendClient;

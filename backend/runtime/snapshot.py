@@ -6,6 +6,10 @@ import importlib.metadata
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 from backend.security.redaction import RedactionEngine
+from backend.runtime.models import RuntimeSnapshotModel, VariableSnapshot
+from backend.runtime.inspector import VariableInspector
+from backend.runtime.snapshot_manager import InMemorySnapshotManager, snapshot_manager
+from backend.runtime.tracer import SnapshotTracer
 
 class RuntimeSnapshotCollector:
     """

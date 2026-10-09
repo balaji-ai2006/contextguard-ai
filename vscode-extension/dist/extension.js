@@ -41,7 +41,10 @@ const path = __importStar(require("path"));
 const backendClient_1 = require("./api/backendClient");
 const errorDetector_1 = require("./detectors/errorDetector");
 const terminalWatcher_1 = require("./detectors/terminalWatcher");
+const debuggerWatcher_1 = require("./detectors/debuggerWatcher");
 const sidebarProvider_1 = require("./ui/sidebarProvider");
+const snapshotManager_1 = require("./runtime/snapshotManager");
+const diagnosticRunner_1 = require("./runtime/diagnosticRunner");
 let backendProcess = null;
 let statusBarItem;
 function activate(context) {
@@ -67,6 +70,17 @@ function activate(context) {
         });
         sidebarProvider.setCurrentBug(bug);
     });
+    // Debugger Watcher
+    const debuggerWatcher = new debuggerWatcher_1.DebuggerWatcher((bug) => {
+        vscode.window.showWarningMessage(`ContextGuard detected debug exception: ${bug.errorType} in ${path.basename(bug.file)}:${bug.line}`, 'Investigate & Fix').then((selection) => {
+            if (selection === 'Investigate & Fix') {
+                sidebarProvider.setCurrentBug(bug);
+                sidebarProvider.investigateBug(bug);
+            }
+        });
+        sidebarProvider.setCurrentBug(bug);
+    });
+    debuggerWatcher.register(context);
     // Listen to terminal data (if terminal shell integration or write event is supported)
     if (vscode.window.onDidWriteTerminalData) {
         context.subscriptions.push(vscode.window.onDidWriteTerminalData((e) => {
@@ -112,13 +126,29 @@ function activate(context) {
             vscode.window.showWarningMessage('No active editor file to analyze.');
             return;
         }
-        const bugs = await errorDetector_1.ErrorDetector.analyzeDocument(editor.document);
+        const bugs = await errorDetector_1.ErrorDetector.analyzeDocument(editor.document, backendClient);
         if (bugs.length > 0) {
             sidebarProvider.setCurrentBug(bugs[0]);
             vscode.window.showInformationMessage(`ContextGuard AI: Detected ${bugs.length} issue(s) in ${path.basename(editor.document.fileName)}.`);
         }
         else {
             vscode.window.showInformationMessage(`ContextGuard AI: No errors detected in ${path.basename(editor.document.fileName)}.`);
+        }
+    }));
+    // Command: Scan AST Deep Inspection
+    context.subscriptions.push(vscode.commands.registerCommand('contextguard.scanAST', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor) {
+            vscode.window.showWarningMessage('No active editor file to analyze AST.');
+            return;
+        }
+        const bugs = await errorDetector_1.ErrorDetector.analyzeDocument(editor.document, backendClient);
+        if (bugs.length > 0) {
+            sidebarProvider.setCurrentBug(bugs[0]);
+            vscode.window.showInformationMessage(`ContextGuard AST: Found ${bugs.length} static anomalies. Primary: ${bugs[0].errorType}`);
+        }
+        else {
+            vscode.window.showInformationMessage('ContextGuard AST: Static analysis verified clean syntax and scope.');
         }
     }));
     // Command: Reproduce & Fix
@@ -189,6 +219,103 @@ function activate(context) {
         else {
             vscode.window.showWarningMessage('ContextGuard Backend is currently offline. Built-in local offline engine active.');
         }
+    }));
+    // Command: Enable Runtime Snapshots
+    context.subscriptions.push(vscode.commands.registerCommand('contextguard.enableRuntimeSnapshots', async () => {
+        snapshotManager_1.extensionSnapshotManager.setCaptureEnabled(true);
+        statusBarItem.text = '$(record) ContextGuard: Snapshots Active';
+        statusBarItem.tooltip = 'ContextGuard AI: Runtime snapshot capture active (Local-only mode)';
+        vscode.window.showInformationMessage('ContextGuard AI: Runtime memory snapshot capture ENABLED (Local-only mode).');
+    }));
+    // Command: Disable Runtime Snapshots
+    context.subscriptions.push(vscode.commands.registerCommand('contextguard.disableRuntimeSnapshots', async () => {
+        snapshotManager_1.extensionSnapshotManager.setCaptureEnabled(false);
+        statusBarItem.text = '$(shield) ContextGuard: Local';
+        statusBarItem.tooltip = 'ContextGuard AI: Privacy-First Bug Detection & Verification Engine';
+        vscode.window.showInformationMessage('ContextGuard AI: Runtime memory snapshot capture DISABLED.');
+    }));
+    // Command: Show Recent Snapshots
+    context.subscriptions.push(vscode.commands.registerCommand('contextguard.showRecentSnapshots', async () => {
+        const snaps = snapshotManager_1.extensionSnapshotManager.listSnapshots();
+        if (snaps.length === 0) {
+            vscode.window.showInformationMessage('ContextGuard AI: No runtime memory snapshots captured yet.');
+            return;
+        }
+        const items = snaps.map((s) => ({
+            label: `$(bug) ${s.errorType || 'RuntimeError'} on line ${s.lineNumber || '?'}`,
+            description: `${path.basename(s.filePath || 'file')}:${s.lineNumber || '?'} [${Object.keys(s.variableSnapshots || {}).length} vars]`,
+            detail: s.errorMessage || (s.heuristicExplanation || 'Exception frame state'),
+            snapshot: s
+        }));
+        const selected = await vscode.window.showQuickPick(items, {
+            placeHolder: 'Select a runtime memory snapshot to inspect'
+        });
+        if (selected) {
+            const fakeBug = {
+                id: selected.snapshot.snapshotId || `snap_${Date.now()}`,
+                file: selected.snapshot.filePath || 'unknown',
+                line: selected.snapshot.lineNumber || 1,
+                column: 1,
+                errorType: selected.snapshot.errorType || 'RuntimeError',
+                message: selected.snapshot.errorMessage || 'Runtime error captured',
+                source: 'debugger',
+                severity: 'HIGH',
+                timestamp: selected.snapshot.timestamp || new Date().toISOString(),
+                runtimeSnapshot: selected.snapshot
+            };
+            sidebarProvider.setCurrentBug(fakeBug);
+        }
+    }));
+    // Command: Clear Snapshots (asks confirmation)
+    context.subscriptions.push(vscode.commands.registerCommand('contextguard.clearSnapshots', async () => {
+        const confirm = await vscode.window.showWarningMessage('Are you sure you want to clear all in-memory runtime snapshots?', { modal: true }, 'Clear Snapshots');
+        if (confirm === 'Clear Snapshots') {
+            const count = snapshotManager_1.extensionSnapshotManager.clearSnapshots();
+            vscode.window.showInformationMessage(`ContextGuard AI: Cleared ${count} runtime memory snapshot(s).`);
+        }
+    }));
+    // Command: Run File with Snapshot Tracing (opt-in diagnostic runner)
+    context.subscriptions.push(vscode.commands.registerCommand('contextguard.runWithSnapshot', async () => {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !editor.document.fileName.endsWith('.py')) {
+            vscode.window.showWarningMessage('Please open a Python (.py) file to run with diagnostic snapshot tracing.');
+            return;
+        }
+        const filePath = editor.document.fileName;
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        vscode.window.withProgress({
+            location: vscode.ProgressLocation.Notification,
+            title: `ContextGuard AI: Running diagnostic tracing on ${path.basename(filePath)}...`,
+            cancellable: false
+        }, async () => {
+            const res = await diagnosticRunner_1.DiagnosticRunner.runFileWithSnapshot(filePath, workspaceRoot);
+            if (res.snapshot) {
+                const bug = {
+                    id: res.snapshot.snapshotId || `diag_${Date.now()}`,
+                    file: res.snapshot.filePath || filePath,
+                    line: res.snapshot.lineNumber || 1,
+                    column: 1,
+                    errorType: res.snapshot.errorType || 'RuntimeError',
+                    message: res.snapshot.errorMessage || 'Diagnostic run captured runtime failure',
+                    source: 'debugger',
+                    severity: 'HIGH',
+                    timestamp: res.snapshot.timestamp || new Date().toISOString(),
+                    runtimeSnapshot: res.snapshot
+                };
+                sidebarProvider.setCurrentBug(bug);
+                vscode.window.showWarningMessage(`ContextGuard AI: Runtime snapshot captured: ${res.snapshot.errorType} on line ${res.snapshot.lineNumber}.`, 'Inspect Variables').then((sel) => {
+                    if (sel === 'Inspect Variables') {
+                        sidebarProvider.setCurrentBug(bug);
+                    }
+                });
+            }
+            else if (res.exitCode === 0) {
+                vscode.window.showInformationMessage(`ContextGuard AI: ${path.basename(filePath)} executed cleanly with zero runtime exceptions.`);
+            }
+            else {
+                vscode.window.showWarningMessage(`ContextGuard AI: Execution exited with code ${res.exitCode}. No exception frame could be inspected.`);
+            }
+        });
     }));
     // Auto-check backend connection on activation
     sidebarProvider.refreshBackendStatus();

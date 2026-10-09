@@ -68,10 +68,11 @@ export interface DetectedBug {
   column: number;
   errorType: string;
   message: string;
-  source: 'diagnostics' | 'terminal' | 'debugger' | 'manual';
+  source: 'diagnostics' | 'terminal' | 'debugger' | 'manual' | 'test_framework' | 'ast_parser';
   severity: SeverityLevel;
   codeSnippet?: string;
   stackTrace?: string;
+  category?: string;
   timestamp: string;
   runtimeSnapshot?: RuntimeSnapshot;
   reproductionConfirmed?: boolean;
@@ -79,12 +80,34 @@ export interface DetectedBug {
   timeTravelFrames?: TimeTravelFrame[];
 }
 
+export interface VariableSnapshotItem {
+  name: string;
+  type: string;
+  preview: string;
+  truncated: boolean;
+  redacted: boolean;
+}
+
 export interface RuntimeSnapshot {
-  variables: Record<string, { type: string; value: string; redacted: boolean }>;
-  callStack: Array<{ function: string; file: string; line: number }>;
-  environment: Record<string, string>;
-  dependencyVersions: Record<string, string>;
-  capturedAt: string;
+  snapshotId?: string;
+  timestamp?: string;
+  language?: string;
+  errorType?: string;
+  errorMessage?: string;
+  filePath?: string;
+  lineNumber?: number;
+  functionName?: string;
+  variableSnapshots?: Record<string, VariableSnapshotItem>;
+  captureMethod?: string;
+  captureStatus?: 'success' | 'partial' | 'unavailable' | 'error';
+  failedExpression?: string;
+  heuristicExplanation?: string;
+  // Backward compatibility fields
+  variables?: Record<string, { type: string; value: string; redacted: boolean }>;
+  callStack?: Array<{ function: string; file: string; line: number }>;
+  environment?: Record<string, string>;
+  dependencyVersions?: Record<string, string>;
+  capturedAt?: string;
 }
 
 export interface RootCauseNode {
@@ -161,3 +184,43 @@ export interface BackendStatus {
   activeModel: string;
   version: string;
 }
+
+export interface DiagnosisConfirmedFacts {
+  observedError: { type: string; message: string; severity?: string };
+  failureLocation: { file: string; line: number; function?: string };
+  observedVariables: Record<string, { type: string; value: string; redacted?: boolean; truncated?: boolean; isConfirmedRuntimeValue?: boolean }>;
+  variableCaptureStatus?: string;
+  failedExpression?: string;
+  gitState?: { branch: string; isClean: boolean; uncommittedFilesCount: number };
+  evidenceSources: string[];
+  isFactuallyConfirmed: boolean;
+}
+
+export interface DiagnosisHypotheses {
+  rootCause: string;
+  failureMechanism: string;
+  propagationPath: string[];
+  hypothesisSummary: string;
+  confidenceScore: number;
+  isVerifiedFact: boolean;
+  inferenceEngine: string;
+}
+
+export interface DiagnosisResult {
+  rootCause: string;
+  failurePoint: string;
+  propagationPath: string[];
+  hypothesis: string;
+  confirmedFacts: DiagnosisConfirmedFacts;
+  hypotheses: DiagnosisHypotheses;
+  evidenceSources: string[];
+  privacyStatus: {
+    privacyMode: string;
+    secretsRedactedCount: number;
+    externalTransmissionAuthorized: boolean;
+    zeroLeakageVerified: boolean;
+  };
+  engine: string;
+  llmAvailable: boolean;
+}
+

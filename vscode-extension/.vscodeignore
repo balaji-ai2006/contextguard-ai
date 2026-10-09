@@ -1,0 +1,15 @@
+.vscode/**
+.vscode-test/**
+src/**
+test/**
+tests/**
+test-runner.js
+test-backend-client.js
+tsconfig.json
+**/*.map
+.git/**
+.gitignore
+.env*
+*.log
+*.vsix
+node_modules/**

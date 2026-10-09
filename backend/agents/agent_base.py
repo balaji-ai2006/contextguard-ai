@@ -16,11 +16,23 @@ class BaseAgent:
         self.model_name = os.environ.get("CONTEXTGUARD_OLLAMA_MODEL", model_name)
         self.ollama_host = os.environ.get("CONTEXTGUARD_OLLAMA_HOST", ollama_host)
 
-    def query_llm(self, prompt: str, system_prompt: str) -> Optional[Dict[str, Any]]:
+    @staticmethod
+    def is_local_host(host_url: str) -> bool:
+        if not host_url:
+            return True
+        lower = host_url.lower()
+        return any(h in lower for h in ("127.0.0.1", "localhost", "::1", "0.0.0.0"))
+
+    def query_llm(self, prompt: str, system_prompt: str, allow_external: bool = False) -> Optional[Dict[str, Any]]:
         """
         Sends query to local Ollama instance with structured JSON format enforcement.
         Enforces zero-trust: prompt is sanitized through RedactionEngine.
+        Blocks external transmission unless explicitly authorized.
         """
+        # Enforce local-only network boundary unless explicitly authorized
+        if not allow_external and not self.is_local_host(self.ollama_host):
+            return None
+
         sanitized_prompt = RedactionEngine.redact_text(prompt)
 
         payload = {
